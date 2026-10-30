@@ -1,0 +1,263 @@
+import sqlite3
+from datetime import datetime
+
+DB_PATH = "memory/database/memory.db"
+
+
+def get_connection():
+    connection = sqlite3.connect(DB_PATH)
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def create_tables():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    # Activity storage
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_path TEXT,
+            title TEXT,
+            content TEXT,
+            captured_at TEXT NOT NULL
+        )
+    """)
+
+    # Memory storage
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            context TEXT,
+            importance_score REAL,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Browser permissions
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS browser_permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            browser_name TEXT NOT NULL UNIQUE,
+            is_allowed INTEGER NOT NULL DEFAULT 0,
+            capture_private INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # Blocked domains
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_domains (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL UNIQUE,
+            reason TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Browser activity
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS browser_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_key TEXT NOT NULL UNIQUE,
+            browser TEXT NOT NULL,
+            title TEXT NOT NULL,
+            total_duration_seconds REAL NOT NULL DEFAULT 0,
+            session_count INTEGER NOT NULL DEFAULT 0,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL
+        )
+    """)
+
+    # VS Code activity
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vscode_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_key TEXT NOT NULL UNIQUE,
+            project TEXT NOT NULL,
+            file TEXT,
+            file_path TEXT,
+            total_duration_seconds REAL NOT NULL DEFAULT 0,
+            session_count INTEGER NOT NULL DEFAULT 0,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL
+        )
+    """)
+
+    # Migrate older databases: add file_path if missing.
+    cursor.execute("PRAGMA table_info(vscode_activity)")
+    vscode_columns = {row[1] for row in cursor.fetchall()}
+
+    if "file_path" not in vscode_columns:
+        cursor.execute("""
+            ALTER TABLE vscode_activity
+            ADD COLUMN file_path TEXT
+        """)
+
+    # File daily activity history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS file_daily_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            activity_date TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            duration_seconds REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY (activity_id) REFERENCES activities(id),
+            UNIQUE(activity_id, activity_date)
+        )
+    """)
+
+    # Browser daily activity history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS browser_daily_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            activity_date TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            duration_seconds REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY (activity_id) REFERENCES browser_activity(id),
+            UNIQUE(activity_id, activity_date)
+        )
+    """)
+
+    # VS Code daily activity history
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vscode_daily_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            activity_date TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            duration_seconds REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY (activity_id) REFERENCES vscode_activity(id),
+            UNIQUE(activity_id, activity_date)
+        )
+    """)
+
+    # User file exclusions
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS file_exclusions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # User-approved file folders
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS file_allowed_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # File permission settings
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS file_permission_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            permission_mode TEXT NOT NULL DEFAULT 'allow_all',
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO file_permission_settings (
+            id,
+            permission_mode,
+            updated_at
+        )
+        VALUES (1, 'allow_all', ?)
+    """, (datetime.now().isoformat(),))
+
+    # Active project folders
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS project_folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            project_name TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Activity evidence
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activity_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            action TEXT,
+            duration_seconds REAL,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Phase 4: relevance decisions
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS relevance_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evidence_id INTEGER NOT NULL UNIQUE,
+            decision TEXT NOT NULL,
+            processed_at TEXT NOT NULL,
+            FOREIGN KEY (evidence_id) REFERENCES activity_evidence(id)
+        )
+    """)
+
+    # Phase 5: memory records
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memory_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evidence_id INTEGER NOT NULL UNIQUE,
+            source_type TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            action TEXT,
+            duration_seconds REAL,
+            details TEXT,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            ai_processed INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (evidence_id) REFERENCES activity_evidence(id)
+        )
+    """)
+
+    # Migrate older databases: add AI processing flag if missing.
+    cursor.execute("PRAGMA table_info(memory_records)")
+    memory_columns = {row[1] for row in cursor.fetchall()}
+
+    if "ai_processed" not in memory_columns:
+        cursor.execute("""
+            ALTER TABLE memory_records
+            ADD COLUMN ai_processed INTEGER NOT NULL DEFAULT 0
+        """)
+
+    # Default browser permissions
+    browsers = ["Chrome", "Brave", "Edge", "Firefox"]
+    now = datetime.now().isoformat()
+
+    for browser in browsers:
+        cursor.execute("""
+            INSERT OR IGNORE INTO browser_permissions (
+                browser_name,
+                is_allowed,
+                capture_private,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """, (browser, 1, 0, now, now))
+
+    connection.commit()
+    connection.close()
+
+
+if __name__ == "__main__":
+    create_tables()
+    print("Database and tables created successfully.")

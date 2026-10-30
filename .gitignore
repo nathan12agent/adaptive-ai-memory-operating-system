@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+memory/ai_engine/chroma_db/
+.env
+.venv/
+.venv_smart_forgetting/
+.venv_smart_forgetting_new/
